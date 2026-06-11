@@ -94,8 +94,28 @@ reclaim storage.
   are NOT caught — an optional future mode could detect them via the `(N)`-collision-sibling signal
   within one `Photos from <year>` folder (two items sharing a name = two real items, even at equal
   size).
-- **Indexed scope so far = 2014 only** (the 6 cached parts `takeout-...-3-00{1..6}.zip` are all
-  `Photos from 2014`). Other years aren't indexed yet; the cache merges across exports as added.
-- **Next:** decide on byte-identical dup detection (videos/double-uploads); index other years;
-  optionally confirm the base64 search-token workaround; promote the POC into a real CLI (Phase 1
-  in `docs/PLAN.md`).
+- **FALSE POSITIVES are real & the fix is a date check (verified 2026-06-11).** Detection currently
+  uses **only** normalized filename + ≥2 distinct sizes — nothing about date or content. Generic
+  names (`001.JPG`…`008.JPG`, `IMG_0001`, scanner counters) collide across *different* photos →
+  falsely grouped. Confirmed on real 2015 data: groups `006.JPG`/`008.JPG` had copies **68–69 days
+  apart**. **Adopt rule: same-name + capture-time |Δ| ≤ 24h = legit duplicate** (24h absorbs tz/
+  re-encode wobble; true clashes are months/years apart). User proposed and OK'd the 24h tolerance.
+- **Date source = EXIF read from the media head, NOT zip time, NOT sidecars:**
+  - **ZIP entry timestamp is useless** — Takeout writes the *export* time (all copies showed
+    `2026-06-11 13:0x`, ~11y off the 2015 photos). Don't use `ZipInfo.date_time` for dating.
+  - **Sidecars are sparse/inconsistent here** — a `001.JPG` group of 10 different-size copies had
+    only **one** sidecar, oddly numbered (`...-metadata(8).json`). Unreliable as the date source.
+  - **EXIF `DateTimeOriginal` via range-read of the first ~64 KB** of each candidate file is the
+    robust answer: JPEG APP1/EXIF sits at the file head (APP1 ≤ 64 KB) and Takeout stores JPEGs
+    **uncompressed**, so we range-read just the head from the zip — KB per file, no sidecar, no full
+    image. `gpdedup/exif.py` (stdlib, II/MM, DateTimeOriginal→Digitized→DateTime fallback) +
+    `poc/poc_exif_probe.py` (reads heads, applies ≤24h, reports bytes pulled).
+    `poc/poc_date_probe.py` is the zip-vs-sidecar diagnostic that proved zip time is export time.
+    Caveat: non-JPEG/stripped files (PNG, some HEIC, screenshots) lack EXIF → fall back to sidecar
+    or leave date unknown and **don't** filter them out (stay safe).
+- **Indexed scope now spans more years** — the cache holds many parts incl. `Photos from 2015`
+  (`takeout-...-3-032.zip` etc.); 537 duplicate *candidate* groups before date-filtering (many are
+  false positives the date rule will drop). Cache merges across exports as added.
+- **Next:** wire `same-name + Δ≤24h` (EXIF head-read date, sidecar fallback) into `group_candidates`
+  as the real dedup criterion; then re-measure the true duplicate count. Later: byte-identical dup
+  detection (videos/double-uploads); promote POC → CLI (Phase 1 in `docs/PLAN.md`).
