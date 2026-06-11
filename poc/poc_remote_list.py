@@ -19,21 +19,24 @@ import zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gpdedup.http_range import HttpRangeReader, RangeNotSupported  # noqa: E402
+from gpdedup.cli_headers import build_headers  # noqa: E402
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("url")
-    ap.add_argument("--header", action="append", default=[])
+    ap.add_argument(
+        "-H", "--header", action="append", default=[],
+        help='extra request header (cURL-compatible), e.g. -H "Cookie: ..."',
+    )
+    ap.add_argument(
+        "-b", "--cookie", action="append", default=[],
+        help='cookie string (cURL -b), e.g. -b "SID=...; HSID=..."',
+    )
     ap.add_argument("--limit", type=int, default=40, help="max entries to print")
     args = ap.parse_args()
 
-    headers = {}
-    for h in args.header:
-        name, _, value = h.partition(":")
-        headers[name.strip()] = value.strip()
-
-    reader = HttpRangeReader(args.url, headers=headers)
+    reader = HttpRangeReader(args.url, headers=build_headers(args.header, args.cookie))
     try:
         total = reader.size
         with zipfile.ZipFile(reader) as zf:

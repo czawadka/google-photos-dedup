@@ -30,5 +30,19 @@ only that tail — yielding **every filename + size + album path** across all 20
 
 **Fallbacks if Range fails:** a Drive/Dropbox-hosted copy, or chunked per-year local download.
 
+## Producing the Takeout export (non-obvious bits)
+
+- Takeout's Google Photos selector offers **only an album picker — no explicit date range**.
+  But the album list **also includes auto-generated `Photos from <year>` buckets**, each
+  containing *every* photo taken that year **including photos not in any user album**. Those year
+  buckets are effectively the date-range selector.
+  - **Small POC slice:** deselect all, tick a single `Photos from <Picasa-era year>` (e.g.
+    2008–2012) → a full year, album + non-album, in one small zip.
+  - **Full library:** select all `Photos from <year>` buckets (or leave "All photo albums
+    included" fully checked).
+- Choose **2 GB archive splits** to avoid ZIP64 (keeps central-directory parsing simple).
+- The export is generated asynchronously and **can take hours or days**; the resulting download
+  link is **signed and short-lived**, so run the range probe promptly once it's ready.
+
 See [goal-and-keep-rule.md](goal-and-keep-rule.md) and
 [google-photos-api-limitation.md](google-photos-api-limitation.md).

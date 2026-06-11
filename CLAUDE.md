@@ -22,3 +22,19 @@ reclaim storage.
 - De-risk load-bearing assumptions with a small **POC before** a full build; report **calibrated
   confidence** with the riskiest unknowns called out; don't auto-start implementation — pause for
   approval.
+
+## Tooling
+
+- Use **uv** for the environment and dependencies (`uv sync`, `uv run ...`), **not** pip.
+
+## Status (updated 2026-06-11)
+
+- **POC Part A: DONE ✓** — range-read mechanism validated locally (`poc/poc_local.py`):
+  listing an 11.5MB archive's directory cost ~1KB (0.01%); single-photo extraction returned
+  correct dimensions. Tests green (`uv run pytest`).
+- **POC Part B: PENDING** — confirm Google's real Takeout download URL honors HTTP `Range`
+  (`206`). Blocked on a Takeout export requested **2026-06-11** (Google warns it may take
+  hours/days). Next action when it lands:
+  `uv run python poc/poc_range_probe.py "<URL>" --header "Cookie: <...>"`, then
+  `poc/poc_remote_list.py` to see real duplicates. See `poc/README.md`.
+- Only after Part B passes: build the real indexer (Phase 1 in `docs/PLAN.md`).
