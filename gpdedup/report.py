@@ -115,6 +115,78 @@ def _chunks(seq, n):
         yield seq[i : i + n]
 
 
+def _copy_cell(url, size, path, verb, cls):
+    """One direct-link cell, or a muted size-only fallback when no sidecar id."""
+    if url:
+        return f'<a class="{cls}" href="{url}" target="_blank">{verb} ({_fmt(size)} B)</a>'
+    return (f'<span class="muted" title="{html.escape(path or "")}">'
+            f'no id · {_fmt(size)} B</span>')
+
+
+def write_table_html(rows: list[dict], out_path: str) -> dict:
+    """Render the delete table — one row per to-delete copy — with columns:
+    filename, KEEP this copy (direct link to the smaller copy), DELETE this copy
+    (direct link to the larger copy), and a search link (opens both) as fallback.
+
+    Each row dict: name, search_url, keep_url/delete_url (str|None),
+    keep_size/delete_size, keep_path/delete_path, clash (bool, optional)."""
+    body = []
+    linked_keep = linked_delete = clashes = 0
+    for r in rows:
+        linked_keep += bool(r.get("keep_url"))
+        linked_delete += bool(r.get("delete_url"))
+        warn = ""
+        if r.get("clash"):
+            clashes += 1
+            warn = '<div class="clash">⚠ keep &amp; delete share the same id</div>'
+        body.append(
+            "<tr>"
+            f'<td>{html.escape(r["name"])}{warn}</td>'
+            f'<td>{_copy_cell(r.get("keep_url"), r["keep_size"], r.get("keep_path"), "keep", "keep")}</td>'
+            f'<td>{_copy_cell(r.get("delete_url"), r["delete_size"], r.get("delete_path"), "delete", "del")}</td>'
+            f'<td><a href="{r["search_url"]}" target="_blank">both</a></td>'
+            "</tr>"
+        )
+
+    total = len(rows)
+    doc = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Google Photos duplicates — delete table</title>
+<style>
+ body {{ font:14px/1.5 system-ui,sans-serif; margin:2rem auto; max-width:920px; color:#222; }}
+ h1 {{ font-size:1.3rem; }}
+ .summary {{ background:#f4f6f8; padding:.8rem 1rem; border-radius:8px; }}
+ table {{ border-collapse:collapse; width:100%; margin-top:1rem; }}
+ th,td {{ text-align:left; padding:.4rem .6rem; border-bottom:1px solid #eee; vertical-align:top; }}
+ th {{ font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; color:#666; }}
+ td:first-child {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
+ a.keep {{ color:#1a7f37; }} a.del {{ color:#b42318; }} a {{ color:#3730a3; }}
+ .muted {{ color:#999; }}
+ .clash {{ color:#b42318; font-family:system-ui,sans-serif; font-size:.78rem; }}
+ .note {{ color:#9a3412; background:#fff7ed; padding:.4rem .7rem; border-radius:6px; margin-top:.8rem; }}
+</style></head><body>
+<h1>Google Photos duplicate worklist</h1>
+<div class="summary">
+ <b>{total}</b> copies to delete &nbsp;·&nbsp; keep-links <b>{linked_keep}</b> ·
+ delete-links <b>{linked_delete}</b>{f" · <b>{clashes}</b> id clash(es)" if clashes else ""}.
+ Each direct link is that copy's unique <code>photos.google.com/photo/&lt;id&gt;</code>.
+</div>
+<p class="note">ℹ️ Per row: open <b>delete</b> → note its albums &amp; remove it; open <b>keep</b> →
+ add it to those albums. Both links target the <b>exact</b> copy (unique id), so no search needed —
+ the <b>both</b> column is only a fallback when an id is missing.</p>
+<table>
+ <thead><tr><th>Filename</th><th>Keep (smaller)</th><th>Delete (larger)</th><th>Search</th></tr></thead>
+ <tbody>
+{chr(10).join(body)}
+ </tbody>
+</table>
+</body></html>"""
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(doc)
+    return {"rows": total, "linked_keep": linked_keep,
+            "linked_delete": linked_delete, "clashes": clashes}
+
+
 def write_html(candidates: dict[str, list[tuple[str, int]]], out_path: str) -> dict:
     model = build_model(candidates)
     total_reclaim = sum(g["reclaim"] for g in model)

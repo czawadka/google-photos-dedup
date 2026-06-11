@@ -62,14 +62,42 @@ reclaim storage.
   the Photos UI ⓘ panel at delete time).
 - **Storage reality:** library is **~26 GB**, much of it free via legacy storage-saver; album/full
   exports run to tens of GB → a hard constraint on re-exporting.
-- **Photo URL / direct links (idea, pending):** each media item's sidecar has a `url` field →
-  `https://photos.google.com/photo/<id>`, a direct link to that *specific* copy. Reading sidecars
-  from the existing export could give direct deep-links to the exact copy to delete (disambiguating
-  identical-looking dupes) without an album re-export. **Claude cannot access these authenticated
-  URLs** (sign-in wall); only a browser session can.
+- **Photo URL / direct links — BUILT ✓ & CONFIRMED working (user verified the link opens the exact
+  photo, 2026-06-11).** Each media item's sidecar `url` field (`https://photos.google.com/photo/<id>`)
+  is a **unique per-library-item id**: the two duplicate copies are *different* library items, so
+  their sidecars carry *different* urls → a direct link disambiguates the otherwise identical-looking
+  search results. **Claude cannot open these authenticated URLs** (sign-in wall); only the user's
+  browser can.
+  - **Delete table** (`poc/poc_report_table.py` → `gpdedup/report.py` `write_table_html`): one row
+    per to-delete copy, columns **Filename · Keep (smaller, direct link) · Delete (larger, direct
+    link) · Search (fallback)**. With both direct links the workflow needs **no search**: open
+    *delete* → read its albums in the ⓘ panel & remove it; open *keep* → add it to those albums.
+  - **Getting ids for all copies costs 2× the pairs** (~196 sidecar reads for 98 photo pairs); the
+    delete-only column needs just the larger copy (~98). Each sidecar JSON is ~1–2 KB by range, so
+    cheap. Sidecar urls are cached (SQLite `sidecars` table) → reruns/`--offline` don't re-fetch.
+  - **Uniqueness assertion:** the tool checks `keep_url != delete_url` per group and flags any
+    clash (⚠) — so the "ids distinguish the copies" claim is verified against real data, not assumed.
+  - **Sidecar↔media matching** (`gpdedup/sidecar.py`): a **reverse-index** approach — read the real
+    `*.json` entries and map each back to the media file it describes, stripping *any* metadata
+    suffix and tolerating the `(N)` collision marker on either the media stem *or* the sidecar tail.
+    Far more robust than guessing names (the first guesser matched only ~42 of ~98). `--diagnose N`
+    prints unmatched copies + the `.json` siblings in their folder to debug stragglers.
+  - **Search links drop the extension** now (`"IMG_6799"` not `"IMG_6799.JPG"`) — per user request;
+    still returns both copies.
 - **Caching:** `gpdedup/cache.py` (SQLite) stores per-part entry listings keyed by Drive
   size+modifiedTime; `poc_drive_index.py` supports `--cache/--refresh/--offline/--explain`.
   Cache persists directory listings (KB) even after the Drive export is deleted → multiple exports
   (e.g. year + albums) can be indexed sequentially and merged from cache.
-- **Next:** confirm the base64 search-token workaround; decide on sidecar direct-links; promote the
-  POC into a real CLI (Phase 1 in `docs/PLAN.md`).
+- **Videos ARE checked** (same pipeline as photos; `MEDIA_EXTENSIONS` covers `.mp4/.m4v/.mov/...`).
+  The 2014 export had **271 videos / 270 distinct names → only 1 duplicate** (`MOVIE.m4v`, two
+  different sizes), which the report includes. So videos are near-never duplicated: Picasa re-encoded
+  *photos* into different-size twins, not videos. The current rule reports only **same-name /
+  different-size** dupes, so **byte-identical** true double-uploads (the only likely video-dup form)
+  are NOT caught — an optional future mode could detect them via the `(N)`-collision-sibling signal
+  within one `Photos from <year>` folder (two items sharing a name = two real items, even at equal
+  size).
+- **Indexed scope so far = 2014 only** (the 6 cached parts `takeout-...-3-00{1..6}.zip` are all
+  `Photos from 2014`). Other years aren't indexed yet; the cache merges across exports as added.
+- **Next:** decide on byte-identical dup detection (videos/double-uploads); index other years;
+  optionally confirm the base64 search-token workaround; promote the POC into a real CLI (Phase 1
+  in `docs/PLAN.md`).
