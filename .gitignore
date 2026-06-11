@@ -1,0 +1,13 @@
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local data / exports
+*.zip
+*.sqlite
