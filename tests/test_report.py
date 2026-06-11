@@ -1,7 +1,20 @@
+import base64
+
 from gpdedup.grouping import is_album_path, summarize_group
 from gpdedup.report import (
-    album_actions, build_model, combined_search_url, or_search_url, search_url, write_html,
+    album_actions, build_model, combined_search_url, or_search_url,
+    search_url, token_search_url, write_html,
 )
+
+
+def test_token_search_url_preserves_literal_name():
+    # underscores + UUID must survive verbatim inside the encoded token
+    name = "original_25b90592-d8da-46d6-bd1c-3d9f43fc0d43_P"
+    url = token_search_url([name])
+    tok = url.rsplit("/", 1)[-1]
+    raw = base64.urlsafe_b64decode(tok + "=" * (-len(tok) % 4))
+    assert name.encode() in raw                      # literal, not tokenized to "originalP"
+    assert raw.startswith(b"\n")                      # field 1, length-delimited
 
 
 def test_is_album_path():

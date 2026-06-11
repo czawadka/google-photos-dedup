@@ -34,7 +34,7 @@ from gpdedup.drive import (  # noqa: E402
 )
 from gpdedup.grouping import group_candidates, is_media_file, summarize_group  # noqa: E402
 from gpdedup.http_range import HttpRangeReader, RangeNotSupported  # noqa: E402
-from gpdedup.report import search_url, write_table_html  # noqa: E402
+from gpdedup.report import token_search_url, write_table_html  # noqa: E402
 from gpdedup.sidecar import (  # noqa: E402
     build_sidecar_index, is_sidecar, match_sidecar, url_from_sidecar_bytes,
 )
@@ -174,11 +174,14 @@ def main() -> int:
     for name in sorted(candidates):
         clusters = summarize_group(candidates[name])
         term = os.path.splitext(name)[0]             # search without the extension
+        # Pre-built /search/<token> (Google's post-redirect form) with the literal
+        # name baked in, so underscores/UUIDs survive Google's plaintext tokenizer.
+        s_url = token_search_url([term])
         keep = clusters[0]
         keep_path = resolve(keep)
         for c in clusters[1:]:                        # everything but the smallest
             del_path = resolve(c)
-            rows.append({"name": name, "search_url": search_url(term),
+            rows.append({"name": name, "search_url": s_url,
                          "keep_path": keep_path, "keep_size": keep["size"],
                          "delete_path": del_path, "delete_size": c["size"]})
 

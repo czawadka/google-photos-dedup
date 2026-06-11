@@ -49,10 +49,13 @@ reclaim storage.
     internal base64 token and in doing so **strips underscores** (`IMG_8773`→`IMG8773`) and
     **drops terms** (10→5, every-other), yielding **"No results."** `%5F`-encoding doesn't help.
     Don't rely on combined search.
-  - **Workaround built, pending test:** we reverse-engineered the `/search/<base64>` protobuf
-    token (`gpdedup/report.py` `search_token`/`token_search_url`); our encoder reproduces
-    Google's token byte-for-byte, so a hand-built token with underscores baked in *may* survive.
-    Not yet confirmed in the UI.
+  - **Encoded search token — CONFIRMED WORKING ✓ (user verified in UI, 2026-06-11).** We build the
+    `/search/<base64>` protobuf token ourselves (`gpdedup/report.py` `search_token`/`token_search_url`,
+    shape `{1: query, 4: {1: query}}`; Google adds an optional field-5 nonce we skip). Because Google
+    renders our pre-built token directly instead of re-parsing plaintext, the **literal filename
+    survives** — underscores AND UUIDs intact (e.g. `original_<uuid>_P` no longer collapses to
+    `originalP`). **The report now always uses this token form** for search links (no more plaintext
+    `%22..%22`), so there's no need to special-case "unsearchable" names.
   - **Search by internal item id does NOT work** — filenames only.
 - **Album membership — only from Takeout folder structure, NOT sidecars.** A photo in an album
   appears in an album-named folder *and* `Photos from YYYY`. Sidecars (`*.json`) carry the photo
@@ -82,8 +85,10 @@ reclaim storage.
     suffix and tolerating the `(N)` collision marker on either the media stem *or* the sidecar tail.
     Far more robust than guessing names (the first guesser matched only ~42 of ~98). `--diagnose N`
     prints unmatched copies + the `.json` siblings in their folder to debug stragglers.
-  - **Search links drop the extension** now (`"IMG_6799"` not `"IMG_6799.JPG"`) — per user request;
-    still returns both copies.
+  - **Search links: extension dropped + encoded token form.** `"IMG_6799"` not `"IMG_6799.JPG"`,
+    emitted as a pre-built `/search/<token>` (see encoded-search-token note above) so any filename —
+    including `original_<uuid>_P` — survives Google's tokenizer. User confirmed the encoded link
+    opens correctly.
 - **Caching:** `gpdedup/cache.py` (SQLite) stores per-part entry listings keyed by Drive
   size+modifiedTime; `poc_drive_index.py` supports `--cache/--refresh/--offline/--explain`.
   Cache persists directory listings (KB) even after the Drive export is deleted → multiple exports

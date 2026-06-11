@@ -173,7 +173,8 @@ def write_table_html(rows: list[dict], out_path: str) -> dict:
 </div>
 <p class="note">ℹ️ Per row: open <b>delete</b> → note its albums &amp; remove it; open <b>keep</b> →
  add it to those albums. Both links target the <b>exact</b> copy (unique id), so no search needed —
- the <b>both</b> column is only a fallback when an id is missing.</p>
+ the <b>both</b> column is a fallback. Search links are pre-built in Google's encoded
+ <code>/search/&lt;token&gt;</code> form so the literal filename (underscores/UUIDs) survives intact.</p>
 <table>
  <thead><tr><th>Filename</th><th>Keep (smaller)</th><th>Delete (larger)</th><th>Search</th></tr></thead>
  <tbody>
