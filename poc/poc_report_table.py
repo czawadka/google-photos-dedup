@@ -27,19 +27,20 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gpdedup.cache import (  # noqa: E402
     DEFAULT_PATH as CACHE_DEFAULT, get_entries, get_parts, open_cache, put_entries,
 )
+from gpdedup.central_dir import read_part_entries  # noqa: E402
 from gpdedup.drive import (  # noqa: E402
-    TAKEOUT_QUERY, auth_header, list_files, media_url, resolve_token,
+    TAKEOUT_QUERY, auth_header, list_files, resolve_token,
 )
 from gpdedup.dating import capture_dates, real_dup_pairs  # noqa: E402
 from gpdedup.grouping import group_candidates, is_media_file  # noqa: E402
-from gpdedup.http_range import HttpRangeReader, RangeNotSupported  # noqa: E402
+from gpdedup.http_range import RangeNotSupported  # noqa: E402
 from gpdedup.report import token_search_url, write_table_html  # noqa: E402
 
 
@@ -64,33 +65,43 @@ def index_parts(args, conn):
     media: list[tuple[str, int]] = []
     name_to_part: dict[str, str] = {}
     print(f"Indexing {len(parts)} part(s):\n")
-    for f in parts:
-        fid, name = f["id"], f.get("name", "")
-        size = int(f.get("size", 0) or 0)
-        mtime = f.get("modifiedTime", "")
 
-        part_entries = None
-        if conn is not None and not args.refresh:
-            part_entries = get_entries(conn, fid, size, mtime)
-        if part_entries is None:
-            reader = HttpRangeReader(media_url(fid), headers=headers)
-            try:
-                with zipfile.ZipFile(reader) as zf:
-                    part_entries = [(i.filename, i.file_size)
-                                    for i in zf.infolist() if not i.is_dir()]
-            except RangeNotSupported as exc:
-                raise SystemExit(f"  {name}: RANGE NOT SUPPORTED — {exc}")
-            if conn is not None:
-                put_entries(conn, fid, name, size, mtime, part_entries)
-            note = f"read {reader.bytes_downloaded:,} bytes [drive]"
-        else:
-            note = "[cache]"
-
-        m = [(n, s) for n, s in part_entries if is_media_file(n)]
+    def absorb(fid, name, part_entries, note):
+        m = [(n, s) for n, s, _ in part_entries if is_media_file(n)]
         media.extend(m)
         for n, _ in m:
             name_to_part[n] = fid
         print(f"  {name}: {len(m):>5} media (of {len(part_entries)} entries) {note}")
+
+    # Serve cached parts from SQLite (instant); read the rest concurrently.
+    to_fetch = []
+    for f in parts:
+        fid, name = f["id"], f.get("name", "")
+        size = int(f.get("size", 0) or 0)
+        mtime = f.get("modifiedTime", "")
+        cached = get_entries(conn, fid, size, mtime) \
+            if conn is not None and not args.refresh else None
+        if cached is not None:
+            absorb(fid, name, cached, "[cache]")
+        else:
+            to_fetch.append((fid, name, size, mtime))
+
+    if to_fetch:
+        if args.offline:
+            raise SystemExit(f"--offline but {len(to_fetch)} part(s) aren't cached; "
+                             "run online once to index them.")
+        with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
+            futs = {ex.submit(read_part_entries, fid, headers): (fid, name, size, mtime)
+                    for fid, name, size, mtime in to_fetch}
+            try:
+                for fut in as_completed(futs):
+                    fid, name, size, mtime = futs[fut]
+                    part_entries, nbytes = fut.result()
+                    if conn is not None:                 # persist on the main thread
+                        put_entries(conn, fid, name, size, mtime, part_entries)
+                    absorb(fid, name, part_entries, f"read {nbytes:,} bytes [drive]")
+            except RangeNotSupported as exc:
+                raise SystemExit(f"RANGE NOT SUPPORTED — {exc}")
     return media, name_to_part
 
 

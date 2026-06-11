@@ -20,17 +20,17 @@ full images — and are cached so repeat runs go offline.
 from __future__ import annotations
 
 import datetime as dt
-import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .cache import get_exif_dates, put_exif_dates
+from .cache import (
+    get_entry_offsets, get_exif_dates, put_entry_offsets, put_exif_dates,
+)
+from .central_dir import read_part_entries
 from .concurrency import AdaptiveLimiter
-from .drive import media_url
 from .drive_fetch import (
     AuthError, RateLimited, TransientError, fetch_head, make_session,
 )
 from .exif import read_exif_datetime
-from .http_range import HttpRangeReader
 
 TOL = dt.timedelta(hours=12)
 MAX_TRIES = 6                  # per-file attempts before recording it dateless
@@ -102,25 +102,42 @@ def capture_dates(conn, need, headers=None, progress=None, max_workers=20,
         if progress:
             progress(stats["fetched"], uncached, stats["bytes"], int(limiter.limit))
 
-    # 1) One central-directory read per part to learn each candidate's local-header
-    #    offset; every candidate then becomes a parallel single-GET job (the fetch
-    #    handles both STORED and DEFLATE, so no per-file zipfile work remains).
+    # 1) Build a single-GET job (fid, path, header_offset, name_len) per candidate.
+    #    Offsets come from the cache for free; only parts whose offsets aren't
+    #    cached (legacy cache / fresh index) need a central-directory read, and
+    #    those are done concurrently and backfilled so later runs skip the network.
     jobs: list[tuple[str, str, int, int]] = []
-    parts_total = len(fetch)
-    for parts_done, (fid, paths) in enumerate(fetch.items(), start=1):
-        reader = HttpRangeReader(media_url(fid), headers=headers)
-        with zipfile.ZipFile(reader) as zf:
+    backfill: list[tuple[str, list[str], dict]] = []   # (fid, paths, cached_offsets)
+    for fid, paths in fetch.items():
+        offs = get_entry_offsets(conn, fid) if conn is not None else {}
+        if all(p in offs for p in paths):
             for p in paths:
-                try:
-                    zi = zf.getinfo(p)
-                except KeyError:
-                    record(fid, p, None, 0)
-                    continue
-                jobs.append((fid, p, zi.header_offset,
-                             len(zi.filename.encode("utf-8"))))
-        stats["bytes"] += reader.bytes_downloaded
-        if on_gather:
-            on_gather(parts_done, parts_total, stats["bytes"])
+                jobs.append((fid, p, offs[p], len(p.encode("utf-8"))))
+        else:
+            backfill.append((fid, paths, offs))
+
+    if backfill:
+        def read_offsets(fid):
+            entries, nbytes = read_part_entries(fid, headers)
+            return fid, {n: off for n, _, off in entries}, nbytes
+
+        parts_total = len(backfill)
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {ex.submit(read_offsets, fid): (fid, paths)
+                    for fid, paths, _ in backfill}
+            for parts_done, fut in enumerate(as_completed(futs), start=1):
+                fid, paths = futs[fut]
+                _, offs, nbytes = fut.result()
+                if conn is not None and offs:
+                    put_entry_offsets(conn, fid, offs)   # main-thread persist
+                for p in paths:
+                    if p in offs:
+                        jobs.append((fid, p, offs[p], len(p.encode("utf-8"))))
+                    else:
+                        record(fid, p, None, 0)          # path not in this zip
+                stats["bytes"] += nbytes
+                if on_gather:
+                    on_gather(parts_done, parts_total, stats["bytes"])
 
     # 2) Fetch the STORED heads in parallel with AIMD concurrency + retry/backoff.
     def worker(job):

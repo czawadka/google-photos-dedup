@@ -144,5 +144,13 @@ reclaim storage.
   403; urllib3 `Retry` handles 5xx/net). `capture_dates` runs a `ThreadPoolExecutor`; **SQLite stays
   main-thread** (results persisted via `as_completed`). Progress shows a labeled gather phase then
   `dating candidates: d/t · MB · N workers`. 401/non-rate-403 → fatal `AuthError`.
+- **Central-dir reads are parallel + offsets cached (DONE 2026-06-12).** Both read sites — `index_parts`
+  (`poc/poc_report_table.py`) and the dating **gather** — read each part's central directory concurrently
+  (`ThreadPoolExecutor`, SQLite stays main-thread) via shared `gpdedup/central_dir.py` `read_part_entries`.
+  Each entry's **`header_offset` is now cached** in the `entries` table (schema migrated in `open_cache`
+  via `ALTER TABLE ADD COLUMN`; `get_entry_offsets`/`put_entry_offsets` — the latter UPDATE-only so it
+  doesn't wipe a part's `exif_dates`). So the gather builds head-fetch jobs straight from the cache with
+  **zero network on repeat runs**; only parts missing offsets (legacy cache / fresh index) are read+
+  backfilled (in parallel) once. `name_len` is derived from the cached name, not stored.
 - **Next:** byte-identical dup detection (videos/double-uploads); promote POC → CLI (Phase 1 in
   `docs/PLAN.md`).

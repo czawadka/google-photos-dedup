@@ -22,9 +22,15 @@ def open_cache(path: str = DEFAULT_PATH) -> sqlite3.Connection:
         "modified_time TEXT, indexed_at TEXT)"
     )
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS entries(file_id TEXT, name TEXT, size INTEGER)"
+        "CREATE TABLE IF NOT EXISTS entries("
+        "file_id TEXT, name TEXT, size INTEGER, header_offset INTEGER)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS ix_entries_file ON entries(file_id)")
+    # Migrate caches created before header_offset existed (so the dating gather
+    # can read each entry's local-header offset from the cache, not the network).
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(entries)")}
+    if "header_offset" not in cols:
+        conn.execute("ALTER TABLE entries ADD COLUMN header_offset INTEGER")
     # Capture date parsed from each candidate's EXIF head. Keyed by (file_id,
     # path); `taken` is an ISO datetime, or '' meaning "probed, but no EXIF
     # date" so we don't re-range-read a dateless file every run.
@@ -37,29 +43,56 @@ def open_cache(path: str = DEFAULT_PATH) -> sqlite3.Connection:
 
 
 def get_entries(conn, file_id: str, size: int, modified_time: str):
-    """Cached (name, size) entries for a part, or None if absent/stale."""
+    """Cached (name, size, header_offset) entries for a part, or None if absent/
+    stale. `header_offset` may be None for parts cached before that column."""
     row = conn.execute(
         "SELECT size, modified_time FROM parts WHERE file_id=?", (file_id,)
     ).fetchone()
     if not row or row[0] != size or row[1] != modified_time:
         return None
-    cur = conn.execute("SELECT name, size FROM entries WHERE file_id=?", (file_id,))
-    return [(n, s) for n, s in cur.fetchall()]
+    cur = conn.execute(
+        "SELECT name, size, header_offset FROM entries WHERE file_id=?", (file_id,)
+    )
+    return [(n, s, off) for n, s, off in cur.fetchall()]
 
 
 def put_entries(conn, file_id, name, size, modified_time, entries) -> None:
+    """Replace a part's entries. `entries` is an iterable of
+    (name, size, header_offset)."""
     conn.execute("DELETE FROM entries WHERE file_id=?", (file_id,))
     # The part changed, so any cached EXIF dates for it are stale too.
     conn.execute("DELETE FROM exif_dates WHERE file_id=?", (file_id,))
     conn.executemany(
-        "INSERT INTO entries(file_id, name, size) VALUES(?,?,?)",
-        ((file_id, n, s) for n, s in entries),
+        "INSERT INTO entries(file_id, name, size, header_offset) VALUES(?,?,?,?)",
+        ((file_id, n, s, off) for n, s, off in entries),
     )
     conn.execute(
         "INSERT OR REPLACE INTO parts(file_id, name, size, modified_time, indexed_at) "
         "VALUES(?,?,?,?,?)",
         (file_id, name, size, modified_time,
          datetime.datetime.now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+
+
+def get_entry_offsets(conn, file_id: str) -> dict:
+    """{name: header_offset} for a part's entries that have a cached offset
+    (rows with NULL offset — legacy cache — are omitted so the caller backfills)."""
+    cur = conn.execute(
+        "SELECT name, header_offset FROM entries "
+        "WHERE file_id=? AND header_offset IS NOT NULL",
+        (file_id,),
+    )
+    return {n: off for n, off in cur.fetchall()}
+
+
+def put_entry_offsets(conn, file_id: str, offsets) -> None:
+    """Backfill local-header offsets for already-cached entries (UPDATE only — it
+    must not touch the entry rows' identity or the part's cached exif_dates).
+    `offsets` is a mapping {name: header_offset}."""
+    conn.executemany(
+        "UPDATE entries SET header_offset=? WHERE file_id=? AND name=?",
+        ((off, file_id, n) for n, off in offsets.items()),
     )
     conn.commit()
 
