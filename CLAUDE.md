@@ -116,17 +116,33 @@ reclaim storage.
   - **Sidecars are sparse/inconsistent here** — a `001.JPG` group of 10 different-size copies had
     only **one** sidecar, oddly numbered (`...-metadata(8).json`). Unreliable as the date source.
   - **EXIF `DateTimeOriginal` via range-read of the first ~64 KB** of each candidate file is the
-    robust answer: JPEG APP1/EXIF sits at the file head (APP1 ≤ 64 KB) and Takeout stores JPEGs
-    **uncompressed**, so we range-read just the head from the zip — KB per file, no sidecar, no full
-    image. `gpdedup/exif.py` (stdlib, II/MM, DateTimeOriginal→Digitized→DateTime fallback) +
-    `poc/poc_exif_probe.py` (reads heads, clusters by time within ≤12h, reports bytes pulled).
-    `poc/poc_date_probe.py` is the zip-vs-sidecar diagnostic that proved zip time is export time.
+    robust answer: JPEG APP1/EXIF sits at the file head (APP1 ≤ 64 KB), so we read just the head —
+    KB per file, no sidecar, no full image. `gpdedup/exif.py` (stdlib, II/MM,
+    DateTimeOriginal→Digitized→DateTime fallback) + `poc/poc_exif_probe.py` (reads heads, clusters
+    by time within ≤12h). `poc/poc_date_probe.py` proved zip time is export time.
     Caveat: non-JPEG/stripped files (PNG, some HEIC, screenshots) lack EXIF → fall back to sidecar
     or leave date unknown and **don't** filter them out (stay safe).
+  - **Takeout entries are DEFLATE-compressed, NOT stored (CORRECTS an earlier assumption, 2026-06-12).**
+    The head-read still works: we fetch the compressed head bytes and **raw-inflate** the first ~64 KB
+    (`gpdedup/drive_fetch.py` `head_from_blob`, handles both STORED and DEFLATE). JPEG deflates ~1:1,
+    so ~64 KB compressed yields ~64 KB decompressed — enough to reach the EXIF.
 - **Indexed scope now spans more years** — the cache holds many parts incl. `Photos from 2015`
   (`takeout-...-3-032.zip` etc.); 537 duplicate *candidate* groups before date-filtering (many are
   false positives the date rule will drop). Cache merges across exports as added.
-- **Next:** wire `same-name + time-cluster (≤12h pairwise)` (EXIF head-read date, sidecar fallback)
-  into `group_candidates` so a candidate group emits **per-cluster dup pairs**, not the whole group;
-  then re-measure the true duplicate count. Later: byte-identical dup detection (videos/double-uploads);
-  promote POC → CLI (Phase 1 in `docs/PLAN.md`).
+- **Date confirmation is wired into the report (DONE 2026-06-12).** `poc/poc_report_table.py` groups
+  by name/size, then confirms each group by capture date and emits **only date-confirmed groups**
+  (one row per group: filename · pair(s) date+sizes · one `/search/<token>` link). `gpdedup/dating.py`
+  `capture_dates` (cache-first) + `real_dup_pairs` (pairwise time-cluster) do the work; offline rebuilds
+  from cached dates. EXIF dates cached in `exif_dates` table, persisted **per file** (interrupt-safe,
+  resumable).
+- **Dating fetch is parallel + pooled + adaptive (DONE 2026-06-12).** Sequential single-threaded fetch
+  was ~3-4 s/file (≈hours for ~5.8 k candidates) — pure latency, no connection reuse. Now:
+  `gpdedup/drive_fetch.py` = pooled keep-alive **`requests.Session`** (added dep) + a **single range GET
+  per file** (read the local-header offset from one central-dir read per part, then fetch+inflate the
+  head — no per-file zipfile, ~1 round-trip not 2). `gpdedup/concurrency.py` = **`AdaptiveLimiter`**
+  (AIMD: concurrency ramps 4→`--max-workers` 20 on success, halves + `Retry-After` cooldown on 429/rate
+  403; urllib3 `Retry` handles 5xx/net). `capture_dates` runs a `ThreadPoolExecutor`; **SQLite stays
+  main-thread** (results persisted via `as_completed`). Progress shows a labeled gather phase then
+  `dating candidates: d/t · MB · N workers`. 401/non-rate-403 → fatal `AuthError`.
+- **Next:** byte-identical dup detection (videos/double-uploads); promote POC → CLI (Phase 1 in
+  `docs/PLAN.md`).

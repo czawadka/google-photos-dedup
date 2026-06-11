@@ -1,9 +1,10 @@
 import base64
+import datetime as dt
 
 from gpdedup.grouping import is_album_path, summarize_group
 from gpdedup.report import (
     album_actions, build_model, combined_search_url, or_search_url,
-    search_url, token_search_url, write_html,
+    search_url, token_search_url, write_html, write_table_html,
 )
 
 
@@ -95,3 +96,25 @@ def test_or_search_url_quotes_and_ors_raw_terms():
     url = or_search_url(["IMG_6799", "IMG_6813"])
     assert url == ("https://photos.google.com/search/"
                    "%22IMG_6799%22%20OR%20%22IMG_6813%22")
+
+
+def test_write_table_html_one_row_per_group_with_pairs(tmp_path):
+    rows = [{
+        "name": "001.JPG",
+        "search_url": "https://photos.google.com/search/TOKEN",
+        "pairs": [
+            {"when": dt.datetime(2015, 1, 4, 11, 10, 25),
+             "sizes": [452_864, 3_869_719], "keep": 452_864, "reclaim": 3_869_719},
+            {"when": dt.datetime(2015, 3, 19, 18, 15, 14),
+             "sizes": [542_381, 4_189_073], "keep": 542_381, "reclaim": 4_189_073},
+        ],
+        "reclaim": 3_869_719 + 4_189_073,
+    }]
+    out = tmp_path / "t.html"
+    stats = write_table_html(rows, str(out))
+    assert stats == {"rows": 1, "reclaim": 3_869_719 + 4_189_073}
+    text = out.read_text()
+    assert text.count("<tr>") == 2                  # 1 header + 1 group row
+    assert "https://photos.google.com/search/TOKEN" in text
+    assert "2015-01-04 11:10" in text and "2015-03-19 18:15" in text  # both pair dates
+    assert "452,864 B" in text and "keep" in text

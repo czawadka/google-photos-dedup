@@ -15,36 +15,17 @@ Usage:
 
 from __future__ import annotations
 
-import datetime as dt
 import os
 import sys
-import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from gpdedup.cache import get_exif_dates, open_cache, put_exif_dates  # noqa: E402
-from gpdedup.drive import auth_header, media_url, resolve_token  # noqa: E402
-from gpdedup.exif import read_exif_datetime  # noqa: E402
+from gpdedup.cache import open_cache  # noqa: E402
+from gpdedup.dating import capture_dates, real_dup_pairs  # noqa: E402
+from gpdedup.drive import auth_header, resolve_token  # noqa: E402
 from gpdedup.grouping import group_candidates, is_media_file  # noqa: E402
-from gpdedup.http_range import HttpRangeReader  # noqa: E402
 
-HEAD = 64 * 1024
 SAMPLE = 8
-TOL = dt.timedelta(hours=12)
-
-
-def cluster_by_time(timed, tol):
-    """Group (datetime, size) copies into time-clusters: a new cluster starts
-    whenever the gap to the previous copy exceeds `tol`. Real duplicates share
-    the same capture instant, so they land in the same cluster; unrelated photos
-    that merely collided on a generic name split into separate clusters."""
-    clusters = []
-    for d, size in sorted(timed):
-        if clusters and d - clusters[-1][-1][0] <= tol:
-            clusters[-1].append((d, size))
-        else:
-            clusters.append([(d, size)])
-    return clusters
 
 
 def main() -> int:
@@ -69,73 +50,29 @@ def main() -> int:
         for path, _ in cands[name]:
             need.setdefault(name_to_part[path], []).append(path)
 
-    # Serve dates from cache; range-read only the copies we haven't probed yet.
-    when: dict[str, dt.datetime] = {}
-    fetch: dict[str, list[str]] = {}
-    cached_hits = 0
-    for fid, paths in need.items():
-        have = get_exif_dates(conn, fid)
-        for p in paths:
-            if p in have:
-                cached_hits += 1
-                if have[p]:
-                    when[p] = have[p]
-            else:
-                fetch.setdefault(fid, []).append(p)
-
-    total_bytes = 0
-    fetched = 0
-    if fetch:
-        headers = auth_header(resolve_token(None))
-        for fid, paths in fetch.items():
-            probed: list[tuple[str, dt.datetime | None]] = []
-            reader = HttpRangeReader(media_url(fid), headers=headers)
-            with zipfile.ZipFile(reader) as zf:
-                for p in paths:
-                    d = None
-                    try:
-                        with zf.open(p) as fp:
-                            head = fp.read(HEAD)    # only the EXIF-bearing head
-                        d = read_exif_datetime(head)
-                    except (KeyError, zipfile.BadZipFile, OSError):
-                        pass
-                    probed.append((p, d))           # store None too (dateless)
-                    if d:
-                        when[p] = d
-            put_exif_dates(conn, fid, probed)
-            fetched += len(paths)
-            total_bytes += reader.bytes_downloaded
+    when, stats = capture_dates(conn, need, auth_header(resolve_token(None)))
 
     for name in names:
         print(f"\n{name}")
-        timed = []
         for path, size in sorted(cands[name], key=lambda x: x[1]):
             d = when.get(path)
-            if d:
-                timed.append((d, size))
             ds = d.strftime("%Y-%m-%d %H:%M:%S") if d else "(no exif)"
             print(f"  {size:>12,}  {ds}")
 
-        # Real duplicates are pairwise: copies sharing a capture instant (within
-        # TOL) AND differing in size. Cluster by time, then test each cluster.
-        clusters = cluster_by_time(timed, TOL)
-        dup_clusters = [c for c in clusters if len({s for _, s in c}) > 1]
-        if dup_clusters:
-            print(f"  => {len(dup_clusters)} real dup pair(s) inside this group:")
-            for c in dup_clusters:
-                sizes = sorted(s for _, s in c)
-                span = max(d for d, _ in c) - min(d for d, _ in c)
-                keep = min(sizes)
-                print(f"       {c[0][0]:%Y-%m-%d %H:%M:%S}  Δ={span}  "
-                      f"sizes={sizes}  keep={keep:,}")
+        pairs = real_dup_pairs(cands[name], when)
+        if pairs:
+            print(f"  => {len(pairs)} real dup pair(s) inside this group:")
+            for p in pairs:
+                print(f"       {p['when']:%Y-%m-%d %H:%M:%S}  "
+                      f"sizes={p['sizes']}  keep={p['keep']:,}")
         else:
-            print(f"  => no real dup (all {len(clusters)} copies "
-                  f">{TOL} apart — different photos sharing the name)")
+            print("  => no real dup (copies >12h apart — different photos "
+                  "sharing the name)")
 
     copies = sum(len(v) for v in need.values())
-    print(f"\n{copies} copies: {cached_hits} from cache, {fetched} range-read "
-          f"· {total_bytes:,} bytes "
-          f"(~{total_bytes // max(fetched, 1):,} B/fetched file). "
+    print(f"\n{copies} copies: {stats['cached']} from cache, {stats['fetched']} "
+          f"range-read · {stats['bytes']:,} bytes "
+          f"(~{stats['bytes'] // max(stats['fetched'], 1):,} B/fetched file). "
           f"No sidecars, no full images.")
     return 0
 

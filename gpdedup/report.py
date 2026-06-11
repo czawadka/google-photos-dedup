@@ -124,12 +124,26 @@ def _sizes_cell(sizes: list[int]) -> str:
     return " · ".join(parts)
 
 
-def write_table_html(rows: list[dict], out_path: str) -> dict:
-    """Render the worklist table — one row per duplicate group — with columns:
-    filename, the copies' sizes (smallest tagged 'keep'), and a Google Photos
-    search link that opens both copies.
+def _pairs_cell(pairs: list[dict]) -> str:
+    """Render each confirmed duplicate pair on its own line: the capture date
+    (what makes it a real dup, not a name clash) and the pair's sizes."""
+    lines = []
+    for p in pairs:
+        when = p.get("when")
+        ts = when.strftime("%Y-%m-%d %H:%M") if when else "—"
+        lines.append(f'<span class="when">{ts}</span> &nbsp; {_sizes_cell(p["sizes"])}')
+    return "<br>".join(lines)
 
-    Each row dict: name, search_url, sizes (list[int]), reclaim (int)."""
+
+def write_table_html(rows: list[dict], out_path: str) -> dict:
+    """Render the worklist table — one row per duplicate group that the date
+    check confirmed — with columns: filename, the confirmed duplicate pair(s)
+    (each pair's capture date + sizes, smallest tagged 'keep'), and a single
+    Google Photos search link for the whole group (it opens every copy of that
+    filename; the dates/sizes tell the pairs apart in the UI).
+
+    Each row dict: name, search_url, pairs (list of {when, sizes, ...}),
+    reclaim (int)."""
     body = []
     total_reclaim = 0
     for r in rows:
@@ -137,8 +151,8 @@ def write_table_html(rows: list[dict], out_path: str) -> dict:
         body.append(
             "<tr>"
             f'<td>{html.escape(r["name"])}</td>'
-            f'<td>{_sizes_cell(r["sizes"])}</td>'
-            f'<td><a href="{r["search_url"]}" target="_blank">open both copies</a></td>'
+            f'<td>{_pairs_cell(r["pairs"])}</td>'
+            f'<td><a href="{r["search_url"]}" target="_blank">open copies</a></td>'
             "</tr>"
         )
 
@@ -154,21 +168,24 @@ def write_table_html(rows: list[dict], out_path: str) -> dict:
  th,td {{ text-align:left; padding:.4rem .6rem; border-bottom:1px solid #eee; vertical-align:top; }}
  th {{ font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; color:#666; }}
  td:first-child {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
+ .when {{ font-variant-numeric:tabular-nums; color:#555; white-space:nowrap; }}
  a {{ color:#3730a3; }}
  .keep {{ color:#1a7f37; font-size:.78em; text-transform:uppercase; letter-spacing:.03em; }}
  .note {{ color:#9a3412; background:#fff7ed; padding:.4rem .7rem; border-radius:6px; margin-top:.8rem; }}
 </style></head><body>
 <h1>Google Photos duplicate worklist</h1>
 <div class="summary">
- <b>{total}</b> duplicate groups &nbsp;·&nbsp; up to <b>{_fmt(total_reclaim)}</b> bytes reclaimable
- if the smallest copy is kept.
+ <b>{total}</b> confirmed duplicate groups &nbsp;·&nbsp; up to <b>{_fmt(total_reclaim)}</b> bytes
+ reclaimable if the smallest copy in each pair is kept.
 </div>
-<p class="note">ℹ️ Click <b>open both copies</b> to see the duplicate pair in Google Photos, then decide
- which to keep from the live "backed up / not consuming storage" status (only visible in the UI),
- add the keeper to any albums, and delete the other. Search links use Google's encoded
+<p class="note">ℹ️ Each row is a filename with a real duplicate confirmed by capture date (same-name
+ copies taken &gt;12h apart are different photos, not dupes, and are excluded). Click <b>open copies</b>
+ to see them in Google Photos, decide which to keep from the live "backed up / not consuming storage"
+ status (only visible in the UI), add the keeper to any albums, and delete the other. The date + sizes
+ distinguish multiple pairs that share a generic name. Search links use Google's encoded
  <code>/search/&lt;token&gt;</code> form so filenames with underscores/UUIDs match correctly.</p>
 <table>
- <thead><tr><th>Filename</th><th>Copies (sizes)</th><th>Search</th></tr></thead>
+ <thead><tr><th>Filename</th><th>Confirmed duplicate(s) — date · sizes</th><th>Search</th></tr></thead>
  <tbody>
 {chr(10).join(body)}
  </tbody>
