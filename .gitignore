@@ -12,3 +12,4 @@ venv/
 *.zip
 *.sqlite
 poc/fixture/
+poc/*.html
