@@ -65,30 +65,23 @@ reclaim storage.
   the Photos UI ⓘ panel at delete time).
 - **Storage reality:** library is **~26 GB**, much of it free via legacy storage-saver; album/full
   exports run to tens of GB → a hard constraint on re-exporting.
-- **Photo URL / direct links — BUILT ✓ & CONFIRMED working (user verified the link opens the exact
-  photo, 2026-06-11).** Each media item's sidecar `url` field (`https://photos.google.com/photo/<id>`)
-  is a **unique per-library-item id**: the two duplicate copies are *different* library items, so
-  their sidecars carry *different* urls → a direct link disambiguates the otherwise identical-looking
-  search results. **Claude cannot open these authenticated URLs** (sign-in wall); only the user's
-  browser can.
-  - **Delete table** (`poc/poc_report_table.py` → `gpdedup/report.py` `write_table_html`): one row
-    per to-delete copy, columns **Filename · Keep (smaller, direct link) · Delete (larger, direct
-    link) · Search (fallback)**. With both direct links the workflow needs **no search**: open
-    *delete* → read its albums in the ⓘ panel & remove it; open *keep* → add it to those albums.
-  - **Getting ids for all copies costs 2× the pairs** (~196 sidecar reads for 98 photo pairs); the
-    delete-only column needs just the larger copy (~98). Each sidecar JSON is ~1–2 KB by range, so
-    cheap. Sidecar urls are cached (SQLite `sidecars` table) → reruns/`--offline` don't re-fetch.
-  - **Uniqueness assertion:** the tool checks `keep_url != delete_url` per group and flags any
-    clash (⚠) — so the "ids distinguish the copies" claim is verified against real data, not assumed.
-  - **Sidecar↔media matching** (`gpdedup/sidecar.py`): a **reverse-index** approach — read the real
-    `*.json` entries and map each back to the media file it describes, stripping *any* metadata
-    suffix and tolerating the `(N)` collision marker on either the media stem *or* the sidecar tail.
-    Far more robust than guessing names (the first guesser matched only ~42 of ~98). `--diagnose N`
-    prints unmatched copies + the `.json` siblings in their folder to debug stragglers.
-  - **Search links: extension dropped + encoded token form.** `"IMG_6799"` not `"IMG_6799.JPG"`,
-    emitted as a pre-built `/search/<token>` (see encoded-search-token note above) so any filename —
-    including `original_<uuid>_P` — survives Google's tokenizer. User confirmed the encoded link
-    opens correctly.
+- **Sidecar direct-links (`photos.google.com/photo/<id>`) — TRIED then REMOVED (2026-06-11).** The
+  idea: read each copy's sidecar `url` (a unique per-library-item id) to deep-link to the exact copy.
+  Built and confirmed working (the link does open the exact photo), but **dropped — no practical
+  value** for the user's workflow: the keep-decision rests on the live *"backed up / not consuming
+  storage"* status, which is **UI-only** (not in Takeout metadata), so the user must open **both**
+  copies in the search view to compare it anyway. A direct link to "the larger copy" doesn't match
+  that decision (the keeper isn't always the smaller), and album membership is likewise UI-only — so
+  the link saved no step while costing ~2× sidecar reads (one per copy). **Decision: index from the
+  ZIP central directory only; report = search links.** (Claude can't open these authenticated URLs
+  regardless — sign-in wall.)
+- **Worklist table** (`poc/poc_report_table.py` → `gpdedup/report.py` `write_table_html`): one row
+  per duplicate group — **Filename · Copies (sizes, smallest tagged 'keep') · Search (opens both
+  copies)**. No sidecar/pixel reads → builds from cached central directories in well under a second.
+- **Search links — encoded token form, extension dropped.** `"IMG_6799"` not `"IMG_6799.JPG"`,
+  emitted as a pre-built `/search/<token>` (see encoded-search-token note above) so any filename —
+  including `original_<uuid>_P` — survives Google's tokenizer. User confirmed the encoded link opens
+  correctly.
 - **Caching:** `gpdedup/cache.py` (SQLite) stores per-part entry listings keyed by Drive
   size+modifiedTime; `poc_drive_index.py` supports `--cache/--refresh/--offline/--explain`.
   Cache persists directory listings (KB) even after the Drive export is deleted → multiple exports

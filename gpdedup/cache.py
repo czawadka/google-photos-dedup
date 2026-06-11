@@ -25,10 +25,6 @@ def open_cache(path: str = DEFAULT_PATH) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS entries(file_id TEXT, name TEXT, size INTEGER)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS ix_entries_file ON entries(file_id)")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS sidecars("
-        "file_id TEXT, name TEXT, url TEXT, PRIMARY KEY(file_id, name))"
-    )
     conn.commit()
     return conn
 
@@ -44,25 +40,8 @@ def get_entries(conn, file_id: str, size: int, modified_time: str):
     return [(n, s) for n, s in cur.fetchall()]
 
 
-def get_sidecar_url(conn, file_id: str, name: str):
-    """Cached photo deep-link for a sidecar, or None if not yet fetched."""
-    row = conn.execute(
-        "SELECT url FROM sidecars WHERE file_id=? AND name=?", (file_id, name)
-    ).fetchone()
-    return row[0] if row else None
-
-
-def put_sidecar_url(conn, file_id: str, name: str, url) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO sidecars(file_id, name, url) VALUES(?,?,?)",
-        (file_id, name, url),
-    )
-    conn.commit()
-
-
 def put_entries(conn, file_id, name, size, modified_time, entries) -> None:
     conn.execute("DELETE FROM entries WHERE file_id=?", (file_id,))
-    conn.execute("DELETE FROM sidecars WHERE file_id=?", (file_id,))
     conn.executemany(
         "INSERT INTO entries(file_id, name, size) VALUES(?,?,?)",
         ((file_id, n, s) for n, s in entries),
