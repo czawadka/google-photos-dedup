@@ -11,3 +11,4 @@ venv/
 # Local data / exports
 *.zip
 *.sqlite
+poc/fixture/
