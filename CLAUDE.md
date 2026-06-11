@@ -98,8 +98,18 @@ reclaim storage.
   uses **only** normalized filename + ≥2 distinct sizes — nothing about date or content. Generic
   names (`001.JPG`…`008.JPG`, `IMG_0001`, scanner counters) collide across *different* photos →
   falsely grouped. Confirmed on real 2015 data: groups `006.JPG`/`008.JPG` had copies **68–69 days
-  apart**. **Adopt rule: same-name + capture-time |Δ| ≤ 24h = legit duplicate** (24h absorbs tz/
-  re-encode wobble; true clashes are months/years apart). User proposed and OK'd the 24h tolerance.
+  apart**.
+- **The date test must be PAIRWISE, not group-wide (corrects the rule, 2026-06-11).** A generic-name
+  group is a *mix*: several unrelated photos sharing the name PLUS one or more real dup pairs hidden
+  inside. EXIF-probing `001.JPG` (10 copies, group span 76 days) revealed two real pairs at identical
+  capture instants — `2015-01-04 11:10:25` (452,864 ↔ 3,869,719) and `2015-03-19 18:15:14`
+  (542,381 ↔ 4,189,073) — plus 6 unrelated singletons. So a **group-wide `max−min` spread is wrong**:
+  it prints FALSE and **throws away the real dups inside**. Correct rule: **cluster copies by capture
+  time; a cluster with ≥2 copies of differing size = a real duplicate pair.** `poc_exif_probe.py`
+  now does this (`cluster_by_time`, new-cluster-when-gap>TOL) and reports per-pair, not per-group.
+- **Tolerance tightened to 12h** (was 24h; user's call 2026-06-11). True name-clashes are months
+  apart, so 12h is plenty and stricter. Residual false-positive path: two genuinely different photos
+  sharing a name AND taken <12h apart — rare, partly filtered by the size-difference requirement.
 - **Date source = EXIF read from the media head, NOT zip time, NOT sidecars:**
   - **ZIP entry timestamp is useless** — Takeout writes the *export* time (all copies showed
     `2026-06-11 13:0x`, ~11y off the 2015 photos). Don't use `ZipInfo.date_time` for dating.
@@ -109,13 +119,14 @@ reclaim storage.
     robust answer: JPEG APP1/EXIF sits at the file head (APP1 ≤ 64 KB) and Takeout stores JPEGs
     **uncompressed**, so we range-read just the head from the zip — KB per file, no sidecar, no full
     image. `gpdedup/exif.py` (stdlib, II/MM, DateTimeOriginal→Digitized→DateTime fallback) +
-    `poc/poc_exif_probe.py` (reads heads, applies ≤24h, reports bytes pulled).
+    `poc/poc_exif_probe.py` (reads heads, clusters by time within ≤12h, reports bytes pulled).
     `poc/poc_date_probe.py` is the zip-vs-sidecar diagnostic that proved zip time is export time.
     Caveat: non-JPEG/stripped files (PNG, some HEIC, screenshots) lack EXIF → fall back to sidecar
     or leave date unknown and **don't** filter them out (stay safe).
 - **Indexed scope now spans more years** — the cache holds many parts incl. `Photos from 2015`
   (`takeout-...-3-032.zip` etc.); 537 duplicate *candidate* groups before date-filtering (many are
   false positives the date rule will drop). Cache merges across exports as added.
-- **Next:** wire `same-name + Δ≤24h` (EXIF head-read date, sidecar fallback) into `group_candidates`
-  as the real dedup criterion; then re-measure the true duplicate count. Later: byte-identical dup
-  detection (videos/double-uploads); promote POC → CLI (Phase 1 in `docs/PLAN.md`).
+- **Next:** wire `same-name + time-cluster (≤12h pairwise)` (EXIF head-read date, sidecar fallback)
+  into `group_candidates` so a candidate group emits **per-cluster dup pairs**, not the whole group;
+  then re-measure the true duplicate count. Later: byte-identical dup detection (videos/double-uploads);
+  promote POC → CLI (Phase 1 in `docs/PLAN.md`).

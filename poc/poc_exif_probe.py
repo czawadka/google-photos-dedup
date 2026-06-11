@@ -29,7 +29,21 @@ from gpdedup.http_range import HttpRangeReader  # noqa: E402
 
 HEAD = 64 * 1024
 SAMPLE = 8
-TOL = dt.timedelta(hours=24)
+TOL = dt.timedelta(hours=12)
+
+
+def cluster_by_time(timed, tol):
+    """Group (datetime, size) copies into time-clusters: a new cluster starts
+    whenever the gap to the previous copy exceeds `tol`. Real duplicates share
+    the same capture instant, so they land in the same cluster; unrelated photos
+    that merely collided on a generic name split into separate clusters."""
+    clusters = []
+    for d, size in sorted(timed):
+        if clusters and d - clusters[-1][-1][0] <= tol:
+            clusters[-1].append((d, size))
+        else:
+            clusters.append([(d, size)])
+    return clusters
 
 
 def main() -> int:
@@ -73,20 +87,29 @@ def main() -> int:
 
     for name in names:
         print(f"\n{name}")
-        dates = []
+        timed = []
         for path, size in sorted(cands[name], key=lambda x: x[1]):
             d = when.get(path)
             if d:
-                dates.append(d)
-            tag = "keep" if size == min(s for _, s in cands[name]) else "del "
+                timed.append((d, size))
             ds = d.strftime("%Y-%m-%d %H:%M:%S") if d else "(no exif)"
-            print(f"  {tag} {size:>12,}  {ds}")
-        if len(dates) >= 2:
-            spread = max(dates) - min(dates)
-            v = "LEGIT dup" if spread <= TOL else "FALSE (different photos)"
-            print(f"  => {v}  Δ={spread}")
+            print(f"  {size:>12,}  {ds}")
+
+        # Real duplicates are pairwise: copies sharing a capture instant (within
+        # TOL) AND differing in size. Cluster by time, then test each cluster.
+        clusters = cluster_by_time(timed, TOL)
+        dup_clusters = [c for c in clusters if len({s for _, s in c}) > 1]
+        if dup_clusters:
+            print(f"  => {len(dup_clusters)} real dup pair(s) inside this group:")
+            for c in dup_clusters:
+                sizes = sorted(s for _, s in c)
+                span = max(d for d, _ in c) - min(d for d, _ in c)
+                keep = min(sizes)
+                print(f"       {c[0][0]:%Y-%m-%d %H:%M:%S}  Δ={span}  "
+                      f"sizes={sizes}  keep={keep:,}")
         else:
-            print(f"  => ?  (only {len(dates)} exif date(s))")
+            print(f"  => no real dup (all {len(clusters)} copies "
+                  f">{TOL} apart — different photos sharing the name)")
 
     copies = sum(len(v) for v in need.values())
     print(f"\nRead {copies} file heads · {total_bytes:,} bytes total "
