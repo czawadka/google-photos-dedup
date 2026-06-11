@@ -3,8 +3,9 @@
 Instead of sidecars, range-read only the first ~64 KB of each candidate copy
 (the JPEG APP1/EXIF segment) straight from the Takeout zip and parse
 DateTimeOriginal. Proves we can get the authoritative capture date per FILE
-without sidecars and without downloading whole images — then applies the
-same-name + |Δ| <= 24h rule and reports total bytes pulled.
+without sidecars and without downloading whole images — then clusters copies by
+capture time (<=12h) to surface real dup pairs. Dates are cached so repeat runs
+go offline; the summary reports cache hits vs. range-reads and bytes pulled.
 
 Usage:
     export DRIVE_TOKEN="ya29...."
@@ -21,7 +22,7 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from gpdedup.cache import open_cache  # noqa: E402
+from gpdedup.cache import get_exif_dates, open_cache, put_exif_dates  # noqa: E402
 from gpdedup.drive import auth_header, media_url, resolve_token  # noqa: E402
 from gpdedup.exif import read_exif_datetime  # noqa: E402
 from gpdedup.grouping import group_candidates, is_media_file  # noqa: E402
@@ -68,22 +69,42 @@ def main() -> int:
         for path, _ in cands[name]:
             need.setdefault(name_to_part[path], []).append(path)
 
-    headers = auth_header(resolve_token(None))
+    # Serve dates from cache; range-read only the copies we haven't probed yet.
     when: dict[str, dt.datetime] = {}
-    total_bytes = 0
+    fetch: dict[str, list[str]] = {}
+    cached_hits = 0
     for fid, paths in need.items():
-        reader = HttpRangeReader(media_url(fid), headers=headers)
-        with zipfile.ZipFile(reader) as zf:
-            for p in paths:
-                try:
-                    with zf.open(p) as fp:
-                        head = fp.read(HEAD)        # only the EXIF-bearing head
-                    d = read_exif_datetime(head)
+        have = get_exif_dates(conn, fid)
+        for p in paths:
+            if p in have:
+                cached_hits += 1
+                if have[p]:
+                    when[p] = have[p]
+            else:
+                fetch.setdefault(fid, []).append(p)
+
+    total_bytes = 0
+    fetched = 0
+    if fetch:
+        headers = auth_header(resolve_token(None))
+        for fid, paths in fetch.items():
+            probed: list[tuple[str, dt.datetime | None]] = []
+            reader = HttpRangeReader(media_url(fid), headers=headers)
+            with zipfile.ZipFile(reader) as zf:
+                for p in paths:
+                    d = None
+                    try:
+                        with zf.open(p) as fp:
+                            head = fp.read(HEAD)    # only the EXIF-bearing head
+                        d = read_exif_datetime(head)
+                    except (KeyError, zipfile.BadZipFile, OSError):
+                        pass
+                    probed.append((p, d))           # store None too (dateless)
                     if d:
                         when[p] = d
-                except (KeyError, zipfile.BadZipFile, OSError):
-                    pass
-        total_bytes += reader.bytes_downloaded
+            put_exif_dates(conn, fid, probed)
+            fetched += len(paths)
+            total_bytes += reader.bytes_downloaded
 
     for name in names:
         print(f"\n{name}")
@@ -112,8 +133,10 @@ def main() -> int:
                   f">{TOL} apart — different photos sharing the name)")
 
     copies = sum(len(v) for v in need.values())
-    print(f"\nRead {copies} file heads · {total_bytes:,} bytes total "
-          f"(~{total_bytes // max(copies, 1):,} B/file). No sidecars, no full images.")
+    print(f"\n{copies} copies: {cached_hits} from cache, {fetched} range-read "
+          f"· {total_bytes:,} bytes "
+          f"(~{total_bytes // max(fetched, 1):,} B/fetched file). "
+          f"No sidecars, no full images.")
     return 0
 
 

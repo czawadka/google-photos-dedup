@@ -25,6 +25,13 @@ def open_cache(path: str = DEFAULT_PATH) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS entries(file_id TEXT, name TEXT, size INTEGER)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS ix_entries_file ON entries(file_id)")
+    # Capture date parsed from each candidate's EXIF head. Keyed by (file_id,
+    # path); `taken` is an ISO datetime, or '' meaning "probed, but no EXIF
+    # date" so we don't re-range-read a dateless file every run.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS exif_dates("
+        "file_id TEXT, path TEXT, taken TEXT, PRIMARY KEY(file_id, path))"
+    )
     conn.commit()
     return conn
 
@@ -42,6 +49,8 @@ def get_entries(conn, file_id: str, size: int, modified_time: str):
 
 def put_entries(conn, file_id, name, size, modified_time, entries) -> None:
     conn.execute("DELETE FROM entries WHERE file_id=?", (file_id,))
+    # The part changed, so any cached EXIF dates for it are stale too.
+    conn.execute("DELETE FROM exif_dates WHERE file_id=?", (file_id,))
     conn.executemany(
         "INSERT INTO entries(file_id, name, size) VALUES(?,?,?)",
         ((file_id, n, s) for n, s in entries),
@@ -51,6 +60,30 @@ def put_entries(conn, file_id, name, size, modified_time, entries) -> None:
         "VALUES(?,?,?,?,?)",
         (file_id, name, size, modified_time,
          datetime.datetime.now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+
+
+def get_exif_dates(conn, file_id: str) -> dict:
+    """Cached capture dates for a part: {path: datetime | None}.
+
+    A path mapped to `None` was probed but had no EXIF date (don't re-read it);
+    a path simply absent from the dict has not been probed yet."""
+    out: dict = {}
+    cur = conn.execute(
+        "SELECT path, taken FROM exif_dates WHERE file_id=?", (file_id,)
+    )
+    for path, taken in cur.fetchall():
+        out[path] = datetime.datetime.fromisoformat(taken) if taken else None
+    return out
+
+
+def put_exif_dates(conn, file_id: str, dates) -> None:
+    """Store probed capture dates. `dates` is an iterable of (path, datetime|None);
+    None records a dateless file so it isn't range-read again."""
+    conn.executemany(
+        "INSERT OR REPLACE INTO exif_dates(file_id, path, taken) VALUES(?,?,?)",
+        ((file_id, p, d.isoformat() if d else "") for p, d in dates),
     )
     conn.commit()
 
