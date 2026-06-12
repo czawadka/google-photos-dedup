@@ -39,7 +39,9 @@ from gpdedup.drive import (  # noqa: E402
     TAKEOUT_QUERY, auth_header, list_files, resolve_token,
 )
 from gpdedup.dating import capture_dates, real_dup_pairs  # noqa: E402
-from gpdedup.grouping import group_candidates, is_media_file  # noqa: E402
+from gpdedup.grouping import (  # noqa: E402
+    group_candidates, is_media_file, is_truncated_name,
+)
 from gpdedup.http_range import RangeNotSupported  # noqa: E402
 from gpdedup.report import token_search_url, write_table_html  # noqa: E402
 
@@ -124,6 +126,18 @@ def main() -> int:
     media, name_to_part = index_parts(args, conn)
     candidates = group_candidates(media)
     print(f"\nName/size candidate groups: {len(candidates)}")
+
+    # Drop Takeout-truncated names: a basename at the 51-char limit lost the tail
+    # that tells distinct files apart, so different derived files (crops/rotations/
+    # motion-portrait twins — not separate library items) merge into one false
+    # same-name group. The date check can't catch them (renditions share one
+    # capture instant), so exclude them before dating/report. See is_truncated_name.
+    truncated = [name for name in candidates if is_truncated_name(name)]
+    if truncated:
+        for name in truncated:
+            del candidates[name]
+        print(f"Excluding {len(truncated)} truncated-name groups "
+              f"(Takeout edit/rendition artifacts, not real library items)")
 
     # Confirm each candidate by capture date: range-read each copy's EXIF head
     # (cached), then keep only groups with a real same-instant dup pair. Drops

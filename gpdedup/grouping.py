@@ -19,6 +19,11 @@ from collections import defaultdict
 # Trailing "(123)" right before the extension, as added by Takeout on collisions.
 _COLLISION = re.compile(r"^(?P<stem>.*?)\((?P<n>\d+)\)$")
 
+# Takeout caps every entry's basename at this many characters (any extension — the
+# stem absorbs the difference). A name AT the limit was truncated, so its
+# distinguishing tail is gone and same-name grouping over it is meaningless.
+TAKEOUT_NAME_LIMIT = 51
+
 # Takeout's per-year buckets hold ALL photos; any other folder is a user album.
 _YEAR_FOLDER = re.compile(r"^Photos from \d{4}$")
 
@@ -58,6 +63,21 @@ def normalize_base_name(path: str) -> str:
     if m:
         root = m.group("stem")
     return root + ext
+
+
+def is_truncated_name(name: str) -> bool:
+    """True if `name` (a basename, normally a normalized group key) hit Takeout's
+    51-char truncation limit.
+
+    Takeout truncates long basenames to 51 chars, cutting the part that tells
+    distinct files apart. E.g. ``original_<uuid>_<orig>.jpg`` collapses to
+    ``original_<uuid>_P.jpg`` (the ``original_<uuid>_`` prefix alone is 46 chars),
+    so several different *derived* files (crops, rotations, motion/portrait twins —
+    NOT separate library items) merge under one truncated name and look like a
+    same-name/different-size duplicate. Such groups are false positives; the date
+    check can't catch them (the renditions share one capture instant). So we drop
+    any group whose normalized name is truncated."""
+    return len(name) >= TAKEOUT_NAME_LIMIT
 
 
 def group_candidates(entries: list[tuple[str, int]]) -> dict[str, list[tuple[str, int]]]:

@@ -152,5 +152,25 @@ reclaim storage.
   doesn't wipe a part's `exif_dates`). So the gather builds head-fetch jobs straight from the cache with
   **zero network on repeat runs**; only parts missing offsets (legacy cache / fresh index) are read+
   backfilled (in parallel) once. `name_len` is derived from the cached name, not stored.
+- **Takeout-truncated names are a FALSE-POSITIVE class — now EXCLUDED (DONE 2026-06-12).** Takeout
+  caps every basename at **51 chars**. `original_<uuid>_<orig>.jpg` (the `original_<uuid>_` prefix is
+  already 46 chars) truncates to `original_<uuid>_P.jpg`, so several distinct *derived* files collapse
+  to one name → Takeout adds `(1)` → `normalize_base_name` strips it → false same-name/different-size
+  group. **The date check can't catch these:** both copies carry the *identical* EXIF instant (Δ=0) —
+  they're one capture rendered two ways. **User manually verified (part 002):** `2f8151cc` = same photo
+  rotated 90°, `5564591e`/`a997ffb0`/`c8cace58` = crops; **Google Photos shows no second item and they
+  consume no storage** → Takeout edit/rendition artifacts, **not deletable library duplicates**. All
+  were **2021–2025** (modern Pixel), outside the Picasa-era (2008–2014) scope. **Threshold is exact:**
+  multi-size candidate groups exist *only* at normalized-name length **51** (22 groups, all
+  date-confirmed); zero at lengths 44–50 or 52 (clean gap down to 26). So `gpdedup/grouping.py`
+  `is_truncated_name` (`len(name) >= TAKEOUT_NAME_LIMIT=51`) drops exactly those 22; `poc_report_table.py`
+  excludes them right after `group_candidates`, before dating/report (also saves ~44 EXIF fetches).
+  Confirmed groups **243 → 221**.
+- **Sidecar-URL deep-links can't disambiguate the truncated class (and sidecars live in OTHER parts).**
+  Reconsidered the per-copy `url` idea for these: there's exactly **one** sidecar per group, its name
+  *also* truncated to `original_<uuid>_.json` (mapping suffix gone, no `(1)` sibling in any of the 35
+  parts), so no per-copy URL exists. Verified structural fact: **sidecars and media are split across
+  different zip parts** — even normal `IMG_3631.JPG` (one part) has its `.supplemental-metadata.json`
+  in another part. (Consistent with the earlier sidecar-direct-link removal — see the 2026-06-11 note.)
 - **Next:** byte-identical dup detection (videos/double-uploads); promote POC → CLI (Phase 1 in
   `docs/PLAN.md`).
