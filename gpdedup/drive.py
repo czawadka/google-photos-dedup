@@ -20,6 +20,13 @@ API = "https://www.googleapis.com/drive/v3/files"
 TAKEOUT_QUERY = "name contains 'takeout' and trashed = false"
 
 
+def with_trashed_filter(q: str) -> str:
+    """Ensure a query excludes trashed files. A custom --query (e.g. to pick one
+    export among several) easily forgets the trashed guard, so append
+    ``and trashed = false`` unless the query already mentions ``trashed``."""
+    return q if "trashed" in q else f"{q.strip()} and trashed = false"
+
+
 def resolve_token(cli_value: str | None) -> str:
     """Prefer an explicit value, else the DRIVE_TOKEN env var (keeps it out of
     shell history)."""

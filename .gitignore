@@ -13,3 +13,6 @@ venv/
 *.sqlite
 poc/fixture/
 poc/*.html
+
+# Generated report (default output of `gpdedup`)
+/delete_table.html
