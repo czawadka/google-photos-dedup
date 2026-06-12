@@ -16,6 +16,11 @@ dev = [
     "pytest>=8.0",
 ]
 
+[tool.uv]
+# Use a uv-managed CPython (OpenSSL), never Apple's system Python (LibreSSL),
+# which makes urllib3 emit NotOpenSSLWarning.
+python-preference = "only-managed"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
