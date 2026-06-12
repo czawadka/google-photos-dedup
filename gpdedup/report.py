@@ -115,35 +115,51 @@ def _chunks(seq, n):
         yield seq[i : i + n]
 
 
-def _sizes_cell(sizes: list[int]) -> str:
-    """Render the copies' sizes ascending, the smallest tagged as the keep target."""
+def _pair_copies(pair: dict) -> list[tuple[str | None, int]]:
+    """[(path|None, size)] for a pair — prefer real copies (so each size can be
+    linked to its per-copy deep link), else fall back to size-only entries."""
+    if pair.get("copies"):
+        return [(path, size) for path, size in pair["copies"]]
+    return [(None, size) for size in pair.get("sizes", [])]
+
+
+def _sizes_cell(pair: dict, url_by_path: dict | None = None) -> str:
+    """Render a pair's copies ascending by size, smallest tagged 'keep'. Each size
+    links to that copy's Google Photos deep link when one is known (url_by_path)."""
     parts = []
-    for i, s in enumerate(sorted(sizes)):
+    for i, (path, s) in enumerate(sorted(_pair_copies(pair), key=lambda c: c[1])):
         tag = ' <span class="keep">keep</span>' if i == 0 else ""
-        parts.append(f"{_fmt(s)} B{tag}")
+        label = f"{_fmt(s)} B"
+        url = url_by_path.get(path) if (url_by_path and path) else None
+        cell = f'<a href="{html.escape(url)}" target="_blank">{label}</a>' if url else label
+        parts.append(cell + tag)
     return " · ".join(parts)
 
 
-def _pairs_cell(pairs: list[dict]) -> str:
+def _pairs_cell(pairs: list[dict], url_by_path: dict | None = None) -> str:
     """Render each confirmed duplicate pair on its own line: the capture date
-    (what makes it a real dup, not a name clash) and the pair's sizes."""
+    (what makes it a real dup, not a name clash) and the pair's per-copy sizes
+    (each linked to its specific copy when a deep link is known)."""
     lines = []
     for p in pairs:
         when = p.get("when")
         ts = when.strftime("%Y-%m-%d %H:%M") if when else "—"
-        lines.append(f'<span class="when">{ts}</span> &nbsp; {_sizes_cell(p["sizes"])}')
+        lines.append(f'<span class="when">{ts}</span> &nbsp; '
+                     f'{_sizes_cell(p, url_by_path)}')
     return "<br>".join(lines)
 
 
-def write_table_html(rows: list[dict], out_path: str) -> dict:
+def write_table_html(rows: list[dict], out_path: str,
+                     url_by_path: dict | None = None) -> dict:
     """Render the worklist table — one row per duplicate group that the date
     check confirmed — with columns: filename, the confirmed duplicate pair(s)
-    (each pair's capture date + sizes, smallest tagged 'keep'), and a single
-    Google Photos search link for the whole group (it opens every copy of that
-    filename; the dates/sizes tell the pairs apart in the UI).
+    (each pair's capture date + sizes, smallest tagged 'keep', each size linked to
+    that specific copy when `url_by_path` provides its deep link), and a single
+    Google Photos search link for the whole group (opens every copy of that
+    filename — the fallback when a per-copy link is missing).
 
-    Each row dict: name, search_url, pairs (list of {when, sizes, ...}),
-    reclaim (int)."""
+    Each row dict: name, search_url, pairs (list of {when, sizes, copies, ...}),
+    reclaim (int). `url_by_path` maps a copy's media path -> its photo deep link."""
     body = []
     total_reclaim = 0
     for r in rows:
@@ -151,7 +167,7 @@ def write_table_html(rows: list[dict], out_path: str) -> dict:
         body.append(
             "<tr>"
             f'<td>{html.escape(r["name"])}</td>'
-            f'<td>{_pairs_cell(r["pairs"])}</td>'
+            f'<td>{_pairs_cell(r["pairs"], url_by_path)}</td>'
             f'<td><a href="{r["search_url"]}" target="_blank">open copies</a></td>'
             "</tr>"
         )
@@ -179,11 +195,13 @@ def write_table_html(rows: list[dict], out_path: str) -> dict:
  reclaimable if the smallest copy in each pair is kept.
 </div>
 <p class="note">ℹ️ Each row is a filename with a real duplicate confirmed by capture date (same-name
- copies taken &gt;12h apart are different photos, not dupes, and are excluded). Click <b>open copies</b>
- to see them in Google Photos, decide which to keep from the live "backed up / not consuming storage"
- status (only visible in the UI), add the keeper to any albums, and delete the other. The date + sizes
- distinguish multiple pairs that share a generic name. Search links use Google's encoded
- <code>/search/&lt;token&gt;</code> form so filenames with underscores/UUIDs match correctly.</p>
+ copies taken &gt;12h apart are different photos, not dupes, and are excluded). Click a <b>linked size</b>
+ to open that exact copy directly (the per-copy deep link, useful when a generic name like
+ <code>001.JPG</code> would otherwise return 100s of search results); or <b>open copies</b> for the whole
+ group. Decide which to keep from the live "backed up / not consuming storage" status (only visible in the
+ UI), add the keeper to any albums, and delete the other. The date + sizes distinguish multiple pairs that
+ share a generic name. Search links use Google's encoded <code>/search/&lt;token&gt;</code> form so
+ filenames with underscores/UUIDs match correctly.</p>
 <table>
  <thead><tr><th>Filename</th><th>Confirmed duplicate(s) — date · sizes</th><th>Search</th></tr></thead>
  <tbody>

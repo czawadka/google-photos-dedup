@@ -65,7 +65,8 @@ reclaim storage.
   the Photos UI ⓘ panel at delete time).
 - **Storage reality:** library is **~26 GB**, much of it free via legacy storage-saver; album/full
   exports run to tens of GB → a hard constraint on re-exporting.
-- **Sidecar direct-links (`photos.google.com/photo/<id>`) — TRIED then REMOVED (2026-06-11).** The
+- **Sidecar direct-links (`photos.google.com/photo/<id>`) — TRIED then REMOVED (2026-06-11), then
+  REVIVED for generic names (2026-06-12 — see the per-copy deep-links note below).** The
   idea: read each copy's sidecar `url` (a unique per-library-item id) to deep-link to the exact copy.
   Built and confirmed working (the link does open the exact photo), but **dropped — no practical
   value** for the user's workflow: the keep-decision rests on the live *"backed up / not consuming
@@ -172,5 +173,23 @@ reclaim storage.
   parts), so no per-copy URL exists. Verified structural fact: **sidecars and media are split across
   different zip parts** — even normal `IMG_3631.JPG` (one part) has its `.supplemental-metadata.json`
   in another part. (Consistent with the earlier sidecar-direct-link removal — see the 2026-06-11 note.)
+- **Per-copy sidecar deep-links REVIVED for the report (DONE 2026-06-12, user-confirmed).** The
+  generic-name groups (`001.JPG`, scanner counters) made the single group search link useless: `"001"`
+  returns ~100 unrelated results, so the real same-name/different-size copies are unfindable. The fix
+  is a **per-copy deep link** from each copy's sidecar `url` (`photos.google.com/photo/<id>` → that
+  exact library item). The two 2026-06-11 objections no longer apply: (a) the **truncated `original_<uuid>_`
+  class is already excluded** (`is_truncated_name`), so its one-sidecar-per-group failure is gone; (b)
+  cost is now bounded — sidecars are fetched **only for date-confirmed copies** (~446 here, not the
+  ~23k all-media), cache-first + parallel. **Offline-validated before building:** of 5,770 candidate
+  copies, **99.9% match a DISTINCT sidecar**; 2,564/2,566 multi-size groups have ALL copies matched,
+  every one to its own sidecar (e.g. `001(1).JPG → 001.JPG.supplemental-metadata(1).json`). The old
+  "only one sidecar per `001` group" worry was a **single-part artifact** — the cross-part global index
+  resolves it. **User ran it online and confirmed** the two size-links on a `001` row open the two
+  different copies. Implementation: restored `gpdedup/sidecar.py` matcher + new `build_sidecar_offsets`
+  (cross-part index from cache, no network) and `resolve_urls` (cache-first, parallel, AIMD-limited,
+  ~8 KB sidecar head fetch); `gpdedup/cache.py` `sidecar_urls(media_path, url)` table; `report.py`
+  links each pair size to its copy's url (group search link kept as fallback when a copy has no url);
+  `poc_report_table.py` resolves confirmed copies + `--no-links`. Offline/`--no-links` just renders
+  sizes unlinked → no regression.
 - **Next:** byte-identical dup detection (videos/double-uploads); promote POC → CLI (Phase 1 in
   `docs/PLAN.md`).

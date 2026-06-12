@@ -6,10 +6,12 @@ from gpdedup.cache import (
     get_entry_offsets,
     get_exif_dates,
     get_parts,
+    get_sidecar_urls,
     open_cache,
     put_entries,
     put_entry_offsets,
     put_exif_dates,
+    put_sidecar_urls,
 )
 
 
@@ -78,6 +80,23 @@ def test_exif_date_roundtrip_and_dateless(tmp_path):
     assert got == {"a.jpg": when, "b.png": None}   # None = probed, no EXIF
     assert "a.jpg" in got and got["a.jpg"] == when
     assert get_exif_dates(conn, "other") == {}     # absent = not probed
+
+
+def test_sidecar_urls_roundtrip_and_none(tmp_path):
+    conn = open_cache(str(tmp_path / "c.sqlite"))
+    put_sidecar_urls(conn, [
+        ("Trip/IMG_0001.JPG", "https://photos.google.com/photo/AAA"),
+        ("Trip/IMG_0002.JPG", None),     # resolved, but the sidecar had no url
+    ])
+    assert get_sidecar_urls(conn) == {
+        "Trip/IMG_0001.JPG": "https://photos.google.com/photo/AAA",
+        "Trip/IMG_0002.JPG": None,
+    }
+    # targeted lookups
+    assert get_sidecar_urls(conn, ["Trip/IMG_0001.JPG"]) == \
+        {"Trip/IMG_0001.JPG": "https://photos.google.com/photo/AAA"}
+    assert get_sidecar_urls(conn, ["nope"]) == {}     # absent = not resolved yet
+    assert get_sidecar_urls(conn, []) == {}
 
 
 def test_reindexing_a_part_drops_its_cached_dates(tmp_path):

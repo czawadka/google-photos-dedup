@@ -38,6 +38,14 @@ def open_cache(path: str = DEFAULT_PATH) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS exif_dates("
         "file_id TEXT, path TEXT, taken TEXT, PRIMARY KEY(file_id, path))"
     )
+    # Per-copy Google Photos deep link, read from the media file's sidecar JSON
+    # `url`. Keyed by the media path; `url` '' means "sidecar resolved but had no
+    # url" so we don't re-fetch it. (Not part-scoped: a media file's sidecar lives
+    # in a *different* part, and the report consumes this by media path.)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sidecar_urls("
+        "media_path TEXT PRIMARY KEY, url TEXT)"
+    )
     conn.commit()
     return conn
 
@@ -117,6 +125,40 @@ def put_exif_dates(conn, file_id: str, dates) -> None:
     conn.executemany(
         "INSERT OR REPLACE INTO exif_dates(file_id, path, taken) VALUES(?,?,?)",
         ((file_id, p, d.isoformat() if d else "") for p, d in dates),
+    )
+    conn.commit()
+
+
+def get_sidecar_urls(conn, media_paths=None) -> dict:
+    """Cached per-copy deep links: {media_path: url | None}.
+
+    `None` means the sidecar was resolved but carried no url (don't re-fetch); a
+    path simply absent has not been resolved yet. With `media_paths` given, only
+    those rows are returned (cheap targeted lookup)."""
+    if media_paths is not None:
+        paths = list(media_paths)
+        if not paths:
+            return {}
+        out: dict = {}
+        for i in range(0, len(paths), 500):       # chunk to stay under SQLite limits
+            chunk = paths[i : i + 500]
+            qs = ",".join("?" * len(chunk))
+            cur = conn.execute(
+                f"SELECT media_path, url FROM sidecar_urls WHERE media_path IN ({qs})",
+                chunk,
+            )
+            out.update({p: (u or None) for p, u in cur.fetchall()})
+        return out
+    cur = conn.execute("SELECT media_path, url FROM sidecar_urls")
+    return {p: (u or None) for p, u in cur.fetchall()}
+
+
+def put_sidecar_urls(conn, items) -> None:
+    """Store resolved deep links. `items` is an iterable of (media_path, url|None);
+    None records a sidecar that had no url so it isn't fetched again."""
+    conn.executemany(
+        "INSERT OR REPLACE INTO sidecar_urls(media_path, url) VALUES(?,?)",
+        ((p, u or "") for p, u in items),
     )
     conn.commit()
 

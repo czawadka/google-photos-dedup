@@ -118,3 +118,28 @@ def test_write_table_html_one_row_per_group_with_pairs(tmp_path):
     assert "https://photos.google.com/search/TOKEN" in text
     assert "2015-01-04 11:10" in text and "2015-03-19 18:15" in text  # both pair dates
     assert "452,864 B" in text and "keep" in text
+
+
+def test_write_table_html_links_each_copy_to_its_deep_link(tmp_path):
+    rows = [{
+        "name": "001.JPG",
+        "search_url": "https://photos.google.com/search/TOKEN",
+        "pairs": [{
+            "when": dt.datetime(2015, 1, 4, 11, 10, 25),
+            "sizes": [452_864, 3_869_719], "keep": 452_864, "reclaim": 3_869_719,
+            "copies": [("Photos from 2015/001(6).JPG", 452_864),
+                       ("Photos from 2015/001(1).JPG", 3_869_719)],
+        }],
+        "reclaim": 3_869_719,
+    }]
+    url_by_path = {
+        "Photos from 2015/001(6).JPG": "https://photos.google.com/photo/SMALL",
+        "Photos from 2015/001(1).JPG": "https://photos.google.com/photo/BIG",
+    }
+    out = tmp_path / "t.html"
+    write_table_html(rows, str(out), url_by_path)
+    text = out.read_text()
+    # each size is now an anchor to its OWN distinct copy (the disambiguation)
+    assert '<a href="https://photos.google.com/photo/SMALL" target="_blank">452,864 B</a>' in text
+    assert '<a href="https://photos.google.com/photo/BIG" target="_blank">3,869,719 B</a>' in text
+    assert "keep" in text                            # smallest still tagged

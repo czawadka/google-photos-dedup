@@ -44,6 +44,7 @@ from gpdedup.grouping import (  # noqa: E402
 )
 from gpdedup.http_range import RangeNotSupported  # noqa: E402
 from gpdedup.report import token_search_url, write_table_html  # noqa: E402
+from gpdedup.sidecar import resolve_urls  # noqa: E402
 
 
 def index_parts(args, conn):
@@ -120,6 +121,8 @@ def main() -> int:
     ap.add_argument("--offline", action="store_true", help="cache only; no token/network")
     ap.add_argument("--max-workers", type=int, default=20,
                     help="max parallel EXIF-head fetches (adaptive, capped here)")
+    ap.add_argument("--no-links", action="store_true",
+                    help="skip per-copy sidecar deep-link resolution")
     args = ap.parse_args()
 
     conn = None if args.no_cache else open_cache(args.cache)
@@ -184,7 +187,26 @@ def main() -> int:
             "reclaim": sum(p["reclaim"] for p in pairs),
         })
 
-    stats = write_table_html(rows, args.report)
+    # Per-copy deep links: resolve each confirmed copy's sidecar `url` so a generic
+    # name (001.JPG -> 100s of search hits) links straight to the exact copy. Only
+    # confirmed copies are fetched (cache-first, parallel); offline/--no-links just
+    # renders the sizes unlinked and falls back to the group search link.
+    url_by_path: dict[str, str] = {}
+    if not args.no_links:
+        copy_paths = [p for r in rows for pair in r["pairs"] for p, _ in pair["copies"]]
+
+        def show_links(done, total, workers):
+            print(f"\r  sidecar links: {done}/{total} copies · {workers} workers",
+                  end="", flush=True)
+
+        url_by_path = resolve_urls(conn, copy_paths, headers or None,
+                                   max_workers=args.max_workers, progress=show_links)
+        resolved = sum(1 for p in copy_paths if p in url_by_path)
+        if copy_paths and url_by_path:
+            print()                                          # close the \r line
+        print(f"Sidecar links: {resolved}/{len(copy_paths)} copies resolved")
+
+    stats = write_table_html(rows, args.report, url_by_path)
     print(f"\nTable written: {args.report}")
     print(f"  {stats['rows']} confirmed groups (of {len(candidates)} candidates) · "
           f"{stats['reclaim']:,} bytes reclaimable (if smallest in each pair kept)")
